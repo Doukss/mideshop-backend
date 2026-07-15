@@ -33,50 +33,65 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - name: Déployer sur l'instance Back via le Front (bastion)
+      - name: Configurer les identifiants AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Autoriser temporairement l'IP du runner en SSH
+        run: |
+          RUNNER_IP=$(curl -s https://checkip.amazonaws.com)
+          echo "RUNNER_IP=${RUNNER_IP}" >> $GITHUB_ENV
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.FRONT_SG_ID }} \
+            --protocol tcp --port 22 \
+            --cidr ${RUNNER_IP}/32
+
+      - name: Déployer sur l'instance Front
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.BACK_HOST }}
+          host: ${{ secrets.FRONT_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          proxy_host: ${{ secrets.FRONT_HOST }}
-          proxy_username: ubuntu
-          proxy_key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             set -e
             IMAGE="${{ env.IMAGE_NAME }}:latest"
 
-            if docker inspect backend >/dev/null 2>&1; then
-              CURRENT_IMAGE=$(docker inspect --format='{{.Config.Image}}' backend)
-              docker tag "$CURRENT_IMAGE" medishop-backend:previous || true
+            if docker inspect frontend >/dev/null 2>&1; then
+              CURRENT_IMAGE=$(docker inspect --format='{{.Config.Image}}' frontend)
+              docker tag "$CURRENT_IMAGE" medishop-frontend:previous || true
             fi
 
             docker pull "$IMAGE"
-            docker rm -f backend || true
+            docker rm -f frontend || true
 
             docker run -d \
-              --name backend \
+              --name frontend \
               --restart unless-stopped \
-              -e PORT=3000 \
-              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              -e FRONTEND_URL="${{ secrets.FRONTEND_URL }}" \
-              -p 3000:3000 \
+              -p 8080:80 \
               "$IMAGE"
 
             sleep 5
 
-            if [ -z "$(docker ps -q -f name=backend -f status=running)" ]; then
+            if [ -z "$(docker ps -q -f name=frontend -f status=running)" ]; then
               echo "Le déploiement a échoué, rollback vers l'image précédente..."
-              docker rm -f backend || true
+              docker rm -f frontend || true
               docker run -d \
-                --name backend \
+                --name frontend \
                 --restart unless-stopped \
-                -e PORT=3000 \
-                -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-                -e FRONTEND_URL="${{ secrets.FRONTEND_URL }}" \
-                -p 3000:3000 \
-                medishop-backend:previous
+                -p 8080:80 \
+                medishop-frontend:previous
               exit 1
             fi
 
-            echo "Déploiement du backend réussi."
+            echo "Déploiement du frontend réussi."
+
+      - name: Révoquer l'accès SSH temporaire
+        if: always()
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.FRONT_SG_ID }} \
+            --protocol tcp --port 22 \
+            --cidr ${{ env.RUNNER_IP }}/32
