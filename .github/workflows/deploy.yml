@@ -46,7 +46,6 @@ jobs:
             set -e
             IMAGE="${{ env.IMAGE_NAME }}:latest"
 
-            # Sauvegarde l'image actuellement en prod, pour un rollback si besoin
             if docker inspect backend >/dev/null 2>&1; then
               CURRENT_IMAGE=$(docker inspect --format='{{.Config.Image}}' backend)
               docker tag "$CURRENT_IMAGE" medishop-backend:previous || true
@@ -66,7 +65,6 @@ jobs:
 
             sleep 5
 
-            # Vérifie que le conteneur tourne toujours après 5s ; sinon rollback
             if [ -z "$(docker ps -q -f name=backend -f status=running)" ]; then
               echo "Le déploiement a échoué, rollback vers l'image précédente..."
               docker rm -f backend || true
