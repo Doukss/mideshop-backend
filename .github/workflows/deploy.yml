@@ -2,7 +2,7 @@ name: Déploiement Backend
 
 on:
   push:
-    branches: [main]
+    branches: [master]
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/medishop-backend
