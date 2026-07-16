@@ -29,6 +29,10 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
       - name: Configurer les identifiants AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -45,18 +49,6 @@ jobs:
             --protocol tcp --port 22 \
             --cidr ${RUNNER_IP}/32
 
-      - name: Révoquer l'accès SSH temporaire
-        if: always()
-        run: |
-          aws ec2 revoke-security-group-ingress \
-            --group-id ${{ secrets.FRONT_SG_ID }} \
-            --protocol tcp --port 22 \
-            --cidr ${{ env.RUNNER_IP }}/32
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
       - name: Déployer sur l'instance Back via le Front (bastion)
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -104,3 +96,11 @@ jobs:
             fi
 
             echo "Déploiement du backend réussi."
+
+      - name: Révoquer l'accès SSH temporaire
+        if: always()
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.FRONT_SG_ID }} \
+            --protocol tcp --port 22 \
+            --cidr ${{ env.RUNNER_IP }}/32
