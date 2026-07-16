@@ -29,10 +29,6 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
       - name: Configurer les identifiants AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -49,45 +45,6 @@ jobs:
             --protocol tcp --port 22 \
             --cidr ${RUNNER_IP}/32
 
-      - name: Déployer sur l'instance Front
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.FRONT_HOST }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            set -e
-            IMAGE="${{ env.IMAGE_NAME }}:latest"
-
-            if docker inspect frontend >/dev/null 2>&1; then
-              CURRENT_IMAGE=$(docker inspect --format='{{.Config.Image}}' frontend)
-              docker tag "$CURRENT_IMAGE" medishop-frontend:previous || true
-            fi
-
-            docker pull "$IMAGE"
-            docker rm -f frontend || true
-
-            docker run -d \
-              --name frontend \
-              --restart unless-stopped \
-              -p 8080:80 \
-              "$IMAGE"
-
-            sleep 5
-
-            if [ -z "$(docker ps -q -f name=frontend -f status=running)" ]; then
-              echo "Le déploiement a échoué, rollback vers l'image précédente..."
-              docker rm -f frontend || true
-              docker run -d \
-                --name frontend \
-                --restart unless-stopped \
-                -p 8080:80 \
-                medishop-frontend:previous
-              exit 1
-            fi
-
-            echo "Déploiement du frontend réussi."
-
       - name: Révoquer l'accès SSH temporaire
         if: always()
         run: |
@@ -95,3 +52,55 @@ jobs:
             --group-id ${{ secrets.FRONT_SG_ID }} \
             --protocol tcp --port 22 \
             --cidr ${{ env.RUNNER_IP }}/32
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Déployer sur l'instance Back via le Front (bastion)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.BACK_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          proxy_host: ${{ secrets.FRONT_HOST }}
+          proxy_username: ubuntu
+          proxy_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            IMAGE="${{ env.IMAGE_NAME }}:latest"
+
+            if docker inspect backend >/dev/null 2>&1; then
+              CURRENT_IMAGE=$(docker inspect --format='{{.Config.Image}}' backend)
+              docker tag "$CURRENT_IMAGE" medishop-backend:previous || true
+            fi
+
+            docker pull "$IMAGE"
+            docker rm -f backend || true
+
+            docker run -d \
+              --name backend \
+              --restart unless-stopped \
+              -e PORT=3000 \
+              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              -e FRONTEND_URL="${{ secrets.FRONTEND_URL }}" \
+              -p 3000:3000 \
+              "$IMAGE"
+
+            sleep 5
+
+            if [ -z "$(docker ps -q -f name=backend -f status=running)" ]; then
+              echo "Le déploiement a échoué, rollback vers l'image précédente..."
+              docker rm -f backend || true
+              docker run -d \
+                --name backend \
+                --restart unless-stopped \
+                -e PORT=3000 \
+                -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+                -e FRONTEND_URL="${{ secrets.FRONTEND_URL }}" \
+                -p 3000:3000 \
+                medishop-backend:previous
+              exit 1
+            fi
+
+            echo "Déploiement du backend réussi."
